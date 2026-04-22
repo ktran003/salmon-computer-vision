@@ -2,13 +2,29 @@
 """
 Randomly samples a stratified subset of the test set for baseline evaluation.
 Produces a test.txt file listing sampled image paths for use with YOLO val.
+
+River identification by filename pattern:
+  Kitwanga: filenames containing 'right_bank' or 'left_bank' (2019 recordings)
+  Bear Creek: filenames containing 'salmon_camera' (2020 recordings)
 """
 import argparse
 import random
 from pathlib import Path
 
+RIVER_PATTERNS = {
+    'kitwanga': ['right_bank', 'left_bank'],
+    'bear':     ['salmon_camera'],
+}
 
-def sample_subset(images_dir, labels_dir, output_txt, n_positive, n_negative, seed=42):
+
+def matches_river(stem, river):
+    if river is None:
+        return True
+    patterns = RIVER_PATTERNS.get(river, [])
+    return any(p in stem for p in patterns)
+
+
+def sample_subset(images_dir, labels_dir, output_txt, n_positive, n_negative, seed=42, river=None):
     random.seed(seed)
 
     images_dir = Path(images_dir)
@@ -16,6 +32,8 @@ def sample_subset(images_dir, labels_dir, output_txt, n_positive, n_negative, se
 
     positive, negative = [], []
     for img in images_dir.glob("*.jpg"):
+        if not matches_river(img.stem, river):
+            continue
         label = labels_dir / (img.stem + ".txt")
         if label.exists() and label.stat().st_size > 0:
             positive.append(img)
@@ -27,13 +45,13 @@ def sample_subset(images_dir, labels_dir, output_txt, n_positive, n_negative, se
     sampled = random.sample(positive, n_pos) + random.sample(negative, n_neg)
     random.shuffle(sampled)
 
-    repo_root = images_dir.parent.parent
+    Path(output_txt).parent.mkdir(parents=True, exist_ok=True)
     with open(output_txt, "w") as f:
         for img in sampled:
-            f.write(str(img.relative_to(repo_root)) + "\n")
+            f.write(str(img.resolve()) + "\n")
 
-    print(f"Sampled {n_pos} positive frames (with salmon) and {n_neg} negative frames")
-    print(f"Total: {len(sampled)} frames -> {output_txt}")
+    river_label = river if river else 'all'
+    print(f"River: {river_label} | {n_pos} positive + {n_neg} negative = {len(sampled)} frames -> {output_txt}")
 
 
 if __name__ == "__main__":
@@ -44,6 +62,9 @@ if __name__ == "__main__":
     parser.add_argument("--n-positive", type=int, default=1500, help="Number of frames with salmon to sample.")
     parser.add_argument("--n-negative", type=int, default=500, help="Number of background frames to sample.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
+    parser.add_argument("--river", choices=["kitwanga", "bear"], default=None,
+                        help="Filter to a specific river. Omit for combined.")
     args = parser.parse_args()
 
-    sample_subset(args.images_dir, args.labels_dir, args.output_txt, args.n_positive, args.n_negative, args.seed)
+    sample_subset(args.images_dir, args.labels_dir, args.output_txt,
+                  args.n_positive, args.n_negative, args.seed, args.river)

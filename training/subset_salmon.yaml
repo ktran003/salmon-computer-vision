@@ -1,4 +1,6 @@
 path: /Users/kim/repos/salmon-computer-vision
+train: data/sample_test.txt
+val: data/sample_test.txt
 test: data/sample_test.txt
 
 names:

@@ -6,6 +6,10 @@
 !.gitkeep
 /models/*
 !pipeline.config
+/labels/*
+/images/*
+/runs/detect/*
+/training/weights/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
