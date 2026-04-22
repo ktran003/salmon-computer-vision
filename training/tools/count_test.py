@@ -31,7 +31,7 @@ def main(args):
     try:
         while True:
             try:
-                counter.count(tracker='bytetrack.yaml', use_gt=False, save_vid=True, device=int(args.device))
+                counter.count(tracker='bytetrack.yaml', use_gt=False, save_vid=True, device=args.device)
             except StopIteration as e:
                 raise
             except Exception as e:
@@ -47,7 +47,7 @@ if __name__ == "__main__":
     parser.add_argument('anno_list_path', help='Filepath to a text file with a list of paths to the annotation file of each sequence.')
     parser.add_argument('csv_output_path', help='Output CSV filepath for saving the counts.')
     parser.add_argument('--weights', default='weights/best.pt', help='Path to YOLO weights to load.')
-    parser.add_argument('--device', default=0, help='GPU device to use.')
+    parser.add_argument('--device', default='mps', help='Device to use (e.g. 0 for CUDA GPU, mps for Apple Silicon, cpu).')
     parser.add_argument('-f', '--format', default='datumaro', help='Input format. Acceptable formats: datumaro, video')
     args = parser.parse_args()
 
