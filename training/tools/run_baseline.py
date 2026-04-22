@@ -15,13 +15,15 @@ import yaml
 SEEDS = [42, 123, 456]
 RIVERS = ['combined', 'kitwanga', 'bear']
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def sample_and_eval(weights, images_dir, labels_dir, data_yaml, batch, device, river, seed):
-    txt_path = Path(f'../data/sample_test_{river}_seed{seed}.txt')
+    txt_path = REPO_ROOT / 'data' / f'sample_test_{river}_seed{seed}.txt'
 
     subprocess.run([
         sys.executable,
-        'tools/sample_subset.py',
+        Path(__file__).parent / 'sample_subset.py',
         '--images-dir', images_dir,
         '--labels-dir', labels_dir,
         '--output-txt', str(txt_path),
@@ -36,7 +38,7 @@ def sample_and_eval(weights, images_dir, labels_dir, data_yaml, batch, device, r
     data['val'] = str(txt_path)
     data['test'] = str(txt_path)
 
-    tmp_yaml = Path(f'../data/tmp_{river}_seed{seed}.yaml')
+    tmp_yaml = REPO_ROOT / 'data' / f'tmp_{river}_seed{seed}.yaml'
     with open(tmp_yaml, 'w') as f:
         yaml.dump(data, f)
 
@@ -79,11 +81,11 @@ def run_all(weights, images_dir, labels_dir, data_yaml, output_csv, batch, devic
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run baseline YOLO evaluation across rivers and seeds.')
-    parser.add_argument('--weights', default='weights/2024-03-19-yolov8n-model-Kitwanga-BearCreek-Koeye-KwaKwa.pt')
-    parser.add_argument('--images-dir', default='../images/test')
-    parser.add_argument('--labels-dir', default='../labels/test')
-    parser.add_argument('--data', default='subset_salmon.yaml')
-    parser.add_argument('--output-csv', default='../results/baseline_metrics.csv')
+    parser.add_argument('--weights', default=str(REPO_ROOT / 'training/weights/2024-03-19-yolov8n-model-Kitwanga-BearCreek-Koeye-KwaKwa.pt'))
+    parser.add_argument('--images-dir', default=str(REPO_ROOT / 'images/test'))
+    parser.add_argument('--labels-dir', default=str(REPO_ROOT / 'labels/test'))
+    parser.add_argument('--data', default=str(REPO_ROOT / 'training/subset_salmon.yaml'))
+    parser.add_argument('--output-csv', default=str(REPO_ROOT / 'results/baseline_metrics.csv'))
     parser.add_argument('--batch', type=int, default=16)
     parser.add_argument('--device', default='mps')
     args = parser.parse_args()
