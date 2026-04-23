@@ -51,8 +51,19 @@ def preprocess(args):
     ])
 
     input_paths = Path(args.input_txt).read_text().strip().splitlines()
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save into an images/ subdir so YOLO can find labels via /images/ -> /labels/ substitution
+    img_out_dir = Path(args.output_dir) / 'images'
+    img_out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Symlink labels/ -> original labels/test so YOLO resolves annotations
+    labels_link = Path(args.output_dir) / 'labels'
+    if not labels_link.exists():
+        original_labels = Path(args.input_txt).read_text().strip().splitlines()[0]
+        # Infer labels dir from first image path: .../images/test -> .../labels/test
+        first_img = Path(original_labels.strip())
+        labels_src = Path(str(first_img.parent).replace('/images/', '/labels/'))
+        labels_link.symlink_to(labels_src.resolve())
 
     new_paths = []
     with torch.no_grad():
@@ -60,14 +71,14 @@ def preprocess(args):
             img_path = Path(path_str.strip())
             x = to_tensor(Image.open(img_path).convert("RGB")).unsqueeze(0).to(device)
             x_recon, _, _ = model(x)
-            out_path = out_dir / img_path.name
+            out_path = img_out_dir / img_path.name
             save_image(x_recon.squeeze(0), out_path)
             new_paths.append(str(out_path.resolve()))
 
     out_txt = Path(args.output_txt)
     out_txt.parent.mkdir(parents=True, exist_ok=True)
     out_txt.write_text("\n".join(new_paths) + "\n")
-    print(f"Preprocessed {len(new_paths)} images -> {out_dir}")
+    print(f"Preprocessed {len(new_paths)} images -> {img_out_dir}")
     print(f"Image list -> {out_txt}")
 
 
