@@ -392,8 +392,13 @@ def sample_and_eval(weights, images_dir, labels_dir, vae_weights, vae_img_size,
 
     # Step 3: YOLO predict + VAE reconstruction error per detection crop
     all_detections = []
+    gt_by_img = {}  # img_path -> (gt_classes, gt_boxes) for TP/FP labelling filtered dets
+    labels_dir_path = Path(labels_dir)
     for img_path in all_img_paths:
         img     = Image.open(img_path).convert('RGB')
+        iw, ih  = img.size
+        gt_classes, gt_boxes = load_gt(labels_dir_path / (Path(img_path).stem + '.txt'), iw, ih)
+        gt_by_img[img_path] = (gt_classes, gt_boxes)
         results = yolo.predict(img_path, verbose=False, device=device)
         if not results or results[0].boxes is None or len(results[0].boxes) == 0:
             continue
@@ -428,13 +433,38 @@ def sample_and_eval(weights, images_dir, labels_dir, vae_weights, vae_img_size,
         print(f"  No filter applied — {len(filtered)} detections passed through")
     elif all_detections:
         filtered = []
+        filtered_by_cls    = defaultdict(int)
+        fp_removed_by_cls  = defaultdict(int)  # correctly removed
+        tp_removed_by_cls  = defaultdict(int)  # incorrectly removed
+        total_by_cls       = defaultdict(int)
         for idx, (p, c, cf, x1, y1, x2, y2, e) in enumerate(all_detections):
+            total_by_cls[c] += 1
             if e <= threshold:
                 filtered.append((p, c, cf, x1, y1, x2, y2))
                 kept_indices.add(idx)
+            else:
+                filtered_by_cls[c] += 1
+                # Check if this filtered detection was actually a TP
+                gt_classes, gt_boxes = gt_by_img.get(p, ([], []))
+                same_cls_boxes = [b for gc, b in zip(gt_classes, gt_boxes) if gc == c]
+                is_tp = False
+                if same_cls_boxes:
+                    pred_t = torch.tensor([[x1, y1, x2, y2]], dtype=torch.float32)
+                    gt_t   = torch.tensor(same_cls_boxes, dtype=torch.float32)
+                    is_tp  = box_iou(pred_t, gt_t)[0].max().item() >= 0.5
+                if is_tp:
+                    tp_removed_by_cls[c] += 1
+                else:
+                    fp_removed_by_cls[c] += 1
         n_removed = len(all_detections) - len(filtered)
         print(f"  Filtered {n_removed}/{len(all_detections)} detections "
               f"(threshold={threshold:.4f})")
+        if n_removed > 0:
+            print(f"  {'Species':<18}  {'removed':>7}  {'total':>6}  {'correct FP':>10}  {'wrong TP':>9}")
+            for c in sorted(filtered_by_cls, key=lambda x: -filtered_by_cls[x]):
+                name = CLASS_NAMES.get(c, str(c))
+                print(f"    {name:<18} {filtered_by_cls[c]:>5} / {total_by_cls[c]:<6}"
+                      f"  FP={fp_removed_by_cls[c]:>4}  TP={tp_removed_by_cls[c]:>4}")
     else:
         filtered = []
         print("  No detections found.")
