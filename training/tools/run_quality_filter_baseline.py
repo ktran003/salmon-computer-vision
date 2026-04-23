@@ -360,7 +360,7 @@ def plot_confusion_matrix(matrix, save_dir, normalize=True):
 
 def sample_and_eval(weights, images_dir, labels_dir, vae_weights, vae_img_size,
                     threshold, device, river, seed,
-                    viz_dir=None, viz_n_frames=20):
+                    viz_dir=None, viz_n_frames=20, no_filter=False):
     # Step 1: sample frames
     txt_path = REPO_ROOT / 'data' / f'sample_test_{river}_seed{seed}.txt'
     subprocess.run([
@@ -377,7 +377,8 @@ def sample_and_eval(weights, images_dir, labels_dir, vae_weights, vae_img_size,
 
     # Step 2: load models
     yolo      = YOLO(weights)
-    vae       = load_vae(vae_weights, torch.device(device))
+    if not no_filter:
+        vae       = load_vae(vae_weights, torch.device(device))
     to_pil    = transforms.ToPILImage()
     to_tensor = transforms.Compose([
         transforms.Resize((vae_img_size, vae_img_size)),
@@ -405,19 +406,27 @@ def sample_and_eval(weights, images_dir, labels_dir, vae_weights, vae_img_size,
                              min(img.width, x2), min(img.height, y2)))
             if crop.width < 4 or crop.height < 4:
                 continue
-            x = to_tensor(crop).unsqueeze(0).to(device)
-            with torch.no_grad():
-                x_recon, _, _ = vae(x)
-            err = F.mse_loss(x_recon, x, reduction='mean').item()
+            if no_filter:
+                err = 0.0
+            else:
+                x = to_tensor(crop).unsqueeze(0).to(device)
+                with torch.no_grad():
+                    x_recon, _, _ = vae(x)
+                err = F.mse_loss(x_recon, x, reduction='mean').item()
             det_idx = len(all_detections)
             all_detections.append((img_path, cls, conf, x1, y1, x2, y2, err))
-            if img_path in viz_frames:
+            if img_path in viz_frames and not no_filter:
                 recon_pil = to_pil(x_recon.squeeze(0).cpu().clamp(0, 1))
                 viz_pils[det_idx] = (crop.copy(), recon_pil)
 
     # Step 4: filter detections above µ+2σ threshold (paper eq. 2)
     kept_indices = set()
-    if all_detections:
+    if no_filter:
+        filtered = [(p, c, cf, x1, y1, x2, y2)
+                    for p, c, cf, x1, y1, x2, y2, e in all_detections]
+        kept_indices = set(range(len(all_detections)))
+        print(f"  No filter applied — {len(filtered)} detections passed through")
+    elif all_detections:
         filtered = []
         for idx, (p, c, cf, x1, y1, x2, y2, e) in enumerate(all_detections):
             if e <= threshold:
@@ -467,15 +476,19 @@ def sample_and_eval(weights, images_dir, labels_dir, vae_weights, vae_img_size,
 
 def run_all(weights, images_dir, labels_dir, vae_weights, vae_img_size,
             calibration_dir, calibration_max, output_csv, device,
-            viz_dir=None, viz_n_frames=20, cm_dir=None):
+            viz_dir=None, viz_n_frames=20, cm_dir=None, no_filter=False):
     # Compute fixed threshold once from calibration crops (µ+2σ, paper eq. 2)
-    device_t   = torch.device(device)
-    vae        = load_vae(vae_weights, device_t)
-    to_tensor  = transforms.Compose([
-        transforms.Resize((vae_img_size, vae_img_size)),
-        transforms.ToTensor(),
-    ])
-    threshold = compute_threshold(calibration_dir, vae, to_tensor, device_t, calibration_max)
+    if no_filter:
+        threshold = None
+        print("VAE filtering disabled — running YOLO-only evaluation for comparison.")
+    else:
+        device_t   = torch.device(device)
+        vae        = load_vae(vae_weights, device_t)
+        to_tensor  = transforms.Compose([
+            transforms.Resize((vae_img_size, vae_img_size)),
+            transforms.ToTensor(),
+        ])
+        threshold = compute_threshold(calibration_dir, vae, to_tensor, device_t, calibration_max)
 
     all_results = []
     cm_by_river = defaultdict(lambda: np.zeros((NC + 1, NC + 1), dtype=np.int64))
@@ -484,7 +497,8 @@ def run_all(weights, images_dir, labels_dir, vae_weights, vae_img_size,
             print(f"\n=== River: {river} | Seed: {seed} ===")
             rows, cm = sample_and_eval(weights, images_dir, labels_dir, vae_weights,
                                        vae_img_size, threshold, device, river, seed,
-                                       viz_dir=viz_dir, viz_n_frames=viz_n_frames)
+                                       viz_dir=viz_dir, viz_n_frames=viz_n_frames,
+                                       no_filter=no_filter)
             cm_by_river[river] += cm
             for r in rows:
                 r['river'] = river
@@ -521,8 +535,12 @@ if __name__ == '__main__':
                         default=str(REPO_ROOT / 'training/weights/2024-03-19-yolov8n-model-Kitwanga-BearCreek-Koeye-KwaKwa.pt'))
     parser.add_argument('--images-dir', default=str(REPO_ROOT / 'images/test'))
     parser.add_argument('--labels-dir', default=str(REPO_ROOT / 'labels/test'))
-    parser.add_argument('--vae-weights', required=True,
-                        help='Path to trained VAE checkpoint (vae_best.pt)')
+    parser.add_argument('--vae-weights', default=None,
+                        help='Path to trained VAE checkpoint (vae_best.pt). '
+                             'Not required when --no-filter is set.')
+    parser.add_argument('--no-filter', action='store_true',
+                        help='Skip VAE filtering and evaluate all YOLO detections — '
+                             'use to produce a comparable baseline via the same eval pipeline')
     parser.add_argument('--vae-img-size', type=int, default=256)
     parser.add_argument('--calibration-dir',
                         default=str(REPO_ROOT / 'data/fish_crops'),
@@ -542,8 +560,11 @@ if __name__ == '__main__':
                         help='Directory to save per-river and overall confusion matrix plots')
     args = parser.parse_args()
 
+    if not args.no_filter and args.vae_weights is None:
+        parser.error('--vae-weights is required unless --no-filter is set')
+
     run_all(args.weights, args.images_dir, args.labels_dir, args.vae_weights,
             args.vae_img_size, args.calibration_dir, args.calibration_max,
             args.output_csv, args.device,
             viz_dir=args.viz_dir, viz_n_frames=args.viz_n_frames,
-            cm_dir=args.cm_dir)
+            cm_dir=args.cm_dir, no_filter=args.no_filter)
