@@ -41,7 +41,8 @@ def preprocess(args):
 
     ckpt = torch.load(args.weights, map_location=device)
     latent_dim = ckpt.get('latent_dim', args.latent_dim)
-    model = VAE(latent_dim=latent_dim).to(device)
+    depth      = ckpt.get('depth', 5)
+    model = VAE(latent_dim=latent_dim, depth=depth).to(device)
     model.load_state_dict(ckpt['state_dict'])
     model.eval()
 

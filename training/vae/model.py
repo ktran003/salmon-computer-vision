@@ -24,42 +24,50 @@ def _deconv_block(in_ch, out_ch, final=False):
     )
 
 
+# Channel widths at each encoder depth level (indexed from 0)
+_CHANNELS = [32, 64, 128, 256, 512]
+
+
 class VAE(nn.Module):
     """
     Convolutional VAE for site-invariant latent feature extraction.
 
-    Expects input images of shape (B, 3, 256, 256).
-    Spatial latent z has shape (B, latent_dim, 8, 8), preserving structure
-    for downstream spatial tasks.
+    depth=4 (default, crops):
+      Encoder: 256->128->64->32->16   (4x stride-2 conv)
+      Latent z: (B, latent_dim, 16, 16)
+      Decoder: 16->32->64->128->256   (4x stride-2 deconv)
 
-    Architecture:
-      Encoder: 256 -> 128 -> 64 -> 32 -> 16 -> 8  (5x stride-2 conv)
-      Latent:  mu, logvar each (B, latent_dim, 8, 8)
-      Decoder: 8 -> 16 -> 32 -> 64 -> 128 -> 256  (5x stride-2 deconv)
+    depth=5 (full frames):
+      Encoder: 256->128->64->32->16->8  (5x stride-2 conv)
+      Latent z: (B, latent_dim, 8, 8)
+      Decoder: 8->16->32->64->128->256  (5x stride-2 deconv)
     """
 
-    def __init__(self, latent_dim=64):
+    def __init__(self, latent_dim=64, depth=4):
         super().__init__()
+        assert 2 <= depth <= 5, "depth must be between 2 and 5"
         self.latent_dim = latent_dim
+        self.depth = depth
 
-        self.encoder = nn.Sequential(
-            _conv_block(3, 32),    # 256 -> 128
-            _conv_block(32, 64),   # 128 -> 64
-            _conv_block(64, 128),  # 64  -> 32
-            _conv_block(128, 256), # 32  -> 16
-            _conv_block(256, 512), # 16  -> 8
-        )
-        self.mu_conv     = nn.Conv2d(512, latent_dim, 1)
-        self.logvar_conv = nn.Conv2d(512, latent_dim, 1)
+        channels = _CHANNELS[:depth]          # e.g. [32,64,128,256] for depth=4
+        pre_latent = channels[-1]
 
-        self.decoder_input = nn.Conv2d(latent_dim, 512, 1)
-        self.decoder = nn.Sequential(
-            _deconv_block(512, 256),          # 8  -> 16
-            _deconv_block(256, 128),          # 16 -> 32
-            _deconv_block(128, 64),           # 32 -> 64
-            _deconv_block(64, 32),            # 64 -> 128
-            _deconv_block(32, 3, final=True), # 128 -> 256
-        )
+        enc_layers = [_conv_block(3, channels[0])]
+        for i in range(1, depth):
+            enc_layers.append(_conv_block(channels[i - 1], channels[i]))
+        self.encoder = nn.Sequential(*enc_layers)
+
+        self.mu_conv     = nn.Conv2d(pre_latent, latent_dim, 1)
+        self.logvar_conv = nn.Conv2d(pre_latent, latent_dim, 1)
+
+        self.decoder_input = nn.Conv2d(latent_dim, pre_latent, 1)
+
+        dec_channels = list(reversed(channels))  # e.g. [256,128,64,32] for depth=4
+        dec_layers = []
+        for i in range(len(dec_channels) - 1):
+            dec_layers.append(_deconv_block(dec_channels[i], dec_channels[i + 1]))
+        dec_layers.append(_deconv_block(dec_channels[-1], 3, final=True))
+        self.decoder = nn.Sequential(*dec_layers)
 
     def encode(self, x):
         h = self.encoder(x)
